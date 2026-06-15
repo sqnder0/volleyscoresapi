@@ -1,18 +1,22 @@
 import json
-from sqlalchemy import column
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer, String, create_engine, Table
+from sqlalchemy.orm import registry, relationship, Session
 
-Base = declarative_base()
+engine = create_engine('sqlite:///volleyball.db', echo=True)
 
-class Club(Base):
-    __table__ = "clubs"
-    
-    vb_id = Column("id", Integer, primary_key=True)
-    name = Column(String)
-    president = Column(String)
-    secretary = Column(String)
-    website = Column(String)
-    
+mapper_registry = registry()
+metadata = mapper_registry.metadata
+club_table = Table('clubs', metadata,
+                   Column('id', String, primary_key=True),
+                   Column('name', String),
+                   Column('president', String),
+                   Column('secretary', String),
+                   Column('website', String),
+                   )
+
+metadata.create_all(engine)
+
+class Club:
     def __init__(self, vb_id:str,
                  name=None, president=None,
                  secretary=None,
@@ -75,6 +79,11 @@ class Club(Base):
             raise ValueError(f"Invalid json string: {e}")
         
         return cls.from_dict(data_dict)
+
+    @classmethod
+    def get_by_id(cls, club_id: str):
+        with Session(engine) as session:
+            return session.get(cls, club_id)
     
 
     
@@ -90,8 +99,21 @@ class Club(Base):
         }
     
     def export(self):
-        result = json.dumps(self.as_dict())
+        result = json.dumps(self.to_dict())
         return result
     
-    def save():
+    def save(self):
+        with Session(engine) as session:
+            session.merge(self)
+            session.commit()
+            
+
+
+mapper_registry.map_imperatively(
+    Club,
+    # club_table,
+    # properties={
+    #     "competition_teams": relationship("CompetitionTeam", back_populates="club")
+    # },
+)
     
