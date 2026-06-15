@@ -56,3 +56,6 @@ logs/
 # OS
 .DS_Store
 .env.local
+
+# tmp
+.tmp/
