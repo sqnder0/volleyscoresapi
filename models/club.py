@@ -1,119 +1,25 @@
-import json
-from sqlalchemy import Column, Integer, String, create_engine, Table
-from sqlalchemy.orm import registry, relationship, Session
+from typing import TYPE_CHECKING
 
-engine = create_engine('sqlite:///volleyball.db', echo=True)
+if TYPE_CHECKING:
+    from team import Team
 
-mapper_registry = registry()
-metadata = mapper_registry.metadata
-club_table = Table('clubs', metadata,
-                   Column('id', String, primary_key=True),
-                   Column('name', String),
-                   Column('president', String),
-                   Column('secretary', String),
-                   Column('website', String),
-                   )
+from sqlalchemy import Integer, String
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from db import Base
 
-metadata.create_all(engine)
-
-class Club:
-    def __init__(self, vb_id:str,
-                 name=None, president=None,
-                 secretary=None,
-                 website=None,
-                 competition_teams=None,
-                 cup_teams=None):
-        """
-        Initialize a Club instance.
-
-        Parameters
-        ----------
-        vb_id : str
-            Unique club identifier (vb id).
-        name : str or None, optional
-            Club name.
-        president : str or None, optional
-            Name of the club president.
-        secretary : str or None, optional
-            Name of the club secretary.
-        website : str or None, optional
-            Club website URL.
-        competition_teams : list or None, optional
-            List of competition teams (default: None).
-        cup_teams : list or None, optional
-            List of cup teams (default: None).
-
-        Notes
-        -----
-        Optional parameters after `vb_id` may be provided positionally
-        or by keyword when calling the constructor or `from_dict`.
-        """
-        self.id = vb_id
-        self.name = name
-        self.president = president
-        self.secretary = secretary
-        self.website = website
-        self.competition_teams = competition_teams
-        self.cup_teams = cup_teams
-        
-    def __repr__(self):
-        return self.name
+class Club(Base):
+    __tablename__ = "clubs"
     
-    @classmethod
-    def from_dict(cls, data:dict):
-        return cls(
-            data["id"],
-            data.get("name"),
-            data.get("president"),
-            data.get("secretary"),
-            data.get("website"),
-            data.get("competition_teams", []),
-            data.get("cup_teams", []),
-        )
-        
-    @classmethod
-    def from_json(cls, data:str):
-        try:
-            data_dict = json.loads(data)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid json string: {e}")
-        
-        return cls.from_dict(data_dict)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vb_id: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        unique=True,
+        index=True
+    )
+    name: Mapped[str] = mapped_column(String(), nullable=False)
+    president: Mapped[str] = mapped_column(String(), nullable=False)
+    secretary: Mapped[str | None ] = mapped_column(String(), nullable=True)
+    website: Mapped[str | None] = mapped_column(String(), nullable=True)
+    teams: Mapped[list["Team"]] = relationship("Team", back_populates="club", cascade="all, delete-orphan")
 
-    @classmethod
-    def get_by_id(cls, club_id: str):
-        with Session(engine) as session:
-            return session.get(cls, club_id)
-    
-
-    
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "president": self.president,
-            "secretary": self.secretary,
-            "website": self.website,
-            "competition_teams": self.competition_teams,
-            "cup_teams": self.cup_teams
-        }
-    
-    def export(self):
-        result = json.dumps(self.to_dict())
-        return result
-    
-    def save(self):
-        with Session(engine) as session:
-            session.merge(self)
-            session.commit()
-            
-
-
-mapper_registry.map_imperatively(
-    Club,
-    # club_table,
-    # properties={
-    #     "competition_teams": relationship("CompetitionTeam", back_populates="club")
-    # },
-)
-    

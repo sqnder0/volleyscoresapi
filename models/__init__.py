@@ -1,3 +1,4 @@
-from models.club import Club
-from models.team import Team 
-from models.series import Series
+from .club import Club
+from .team import Team
+from .match import Match
+from .set import Set
