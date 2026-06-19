@@ -237,7 +237,7 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
     if search_type == "club":
         return clubs
     
-    if search_type == "team":
+    if search_type == "ploeg":
         return teams
     
     return {
@@ -360,3 +360,70 @@ def get_club(label: str, club_id: int):
 
     return result
 
+def _extract_team(td):
+    onclick = td.get("onclick", "")
+
+    m = re.search(r",(\d+),'','','%'\);?$", onclick)
+
+    return {
+        "name": td.get_text(strip=True),
+        "team_id": int(m.group(1)) if m else None,
+    }
+
+
+def get_team(team_label: str, team_id: int):
+    base = "https://www.volleyscores.be/index.php"
+
+    params = {
+        "v": "2",
+        "ss": "0",
+        "isActiveSeason": "1",
+        "t": f"Ploeg {team_label}",
+        "a": "t",
+        "se": "13",
+        "ti": str(team_id),
+        "lng": "nl",
+    }
+
+    r = requests.get(
+        base,
+        params=params,
+        timeout=10,
+    )
+
+    r.raise_for_status()
+
+    page = BeautifulSoup(r.text, "html.parser")
+
+    result = {
+        "matches": []
+    }
+
+    table = page.select_one("table.table")
+
+    if not table:
+        return result
+
+    for tr in table.select("tr"):
+        teams = tr.select("td.hidden-xs.team")
+
+        if len(teams) != 2:
+            continue
+
+        cells = tr.find_all("td", recursive=False)
+
+        if len(cells) < 8:
+            continue
+
+        result["matches"].append({
+            "match_code": cells[0].get_text(strip=True),
+            "day": cells[1].get_text(strip=True),
+            "date": cells[2].get_text(strip=True),
+            "time": cells[3].get_text(strip=True),
+            "home_team": _extract_team(teams[0]),
+            "away_team": _extract_team(teams[1]),
+            "venue": cells[7].get_text(strip=True),
+            "result": cells[8].get_text(strip=True),
+        })
+
+    return result
