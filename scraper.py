@@ -1,8 +1,9 @@
 from playwright.sync_api import sync_playwright, expect
 from playwright.sync_api import Locator
 from typing import Literal
+from urllib.parse import urlencode
 import re
-import json
+from bs4 import BeautifulSoup
 import requests
 
 # Toggle for debug purposes
@@ -219,7 +220,8 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
         if item["data"]["category"] == "Clubs":
             club = {
                 "label": item["value"],
-                "club_id": item["value"].split(" ")[0],
+                "club_code": item["value"].split(" ")[0],
+                "club_id": item["data"]["fields"]["ci"],
                 "name": " ".join(item["value"].split(" ")[1:]),
             }
             clubs.append(club)
@@ -227,6 +229,7 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
             team = {
                 "label": item["value"],
                 "league_id": item["value"].split(" ")[0],
+                "team_id": item["data"]["fields"]["ti"],
                 "name": " ".join(item["value"].split(" ")[2:]),
             }
             teams.append(team)
@@ -241,4 +244,119 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
             "clubs": clubs,
             "teams": teams,
         }
+
+
+def get_club(label: str, club_id: int):
+    base = "https://www.volleyscores.be/index.php"
+
+    params = {
+        "v": "2",
+        "isActiveSeason": "1",
+        "t": f"Club {label}",
+        "a": "cc",
+        "se": "13",
+        "ci": str(club_id),
+        "lng": "nl",
+    }
+
+    r = requests.get(
+        f"{base}?{urlencode(params)}",
+        timeout=10,
+    )
+
+    r.raise_for_status()
+
+    page = BeautifulSoup(r.text, "html.parser")
+
+    result = {
+        "name": None,
+        "general": {},
+        "competition_teams": [],
+        "cup_teams": [],
+    }
+
+    title = page.find("div", class_="teamtitle")
+    if title:
+        result["name"] = title.get_text(strip=True)
+
+    for section in page.find_all("div", class_="teamsubtitle"):
+        section_name = section.get_text(strip=True)
+
+        if section_name == "Algemeen":
+            container = section.find_next("div", class_="col-md-4")
+
+            if container:
+                for row in container.find_all(
+                    "div",
+                    class_="col-xs-12",
+                    recursive=False,
+                ):
+                    key = row.find("label")
+                    value = row.find("div", class_="col-xs-9")
+
+                    if key and value:
+                        result["general"][
+                            key.get_text(strip=True)
+                        ] = value.get_text(" ", strip=True)
+
+        elif section_name in {"Ploegen competitie", "Ploegen beker"}:
+            table = section.find_next("table")
+
+            if not table:
+                continue
+
+            target = (
+                result["competition_teams"]
+                if section_name == "Ploegen competitie"
+                else result["cup_teams"]
+            )
+
+            for tr in table.select("tr"):
+                serie = tr.find("td", class_="serie")
+                team = tr.find("td", class_="team")
+
+                if not serie or not team:
+                    continue
+
+                cells = tr.find_all("td", class_="hidden-xs")
+                onclick = team.get("onclick")
+                team_id = None
+
+                if onclick:
+                    inside = str(onclick).split("(", 1)[1].rsplit(")", 1)[0]
+
+                    # split args more safely
+                    raw_args = re.findall(r"'[^']*'|\d+", inside)
+
+                    candidates = []
+
+                    for a in raw_args:
+                        a = a.strip("'")
+
+                        if not a or a == "%":
+                            continue
+
+                        if a.isdigit():
+                            num = int(a)
+
+                            # heuristic filter: adjust if needed
+                            if 1000 <= num <= 10_000_000:
+                                candidates.append(num)
+
+                    # pick the best candidate (usually only one)
+                    if len(candidates) == 1:
+                        team_id = candidates[0]
+
+                target.append(
+                    {
+                        "series": serie.get_text(" ", strip=True),
+                        "team": team.get_text(" ", strip=True),
+                        "id": team_id,
+                        "ranking": cells[2].get_text(" ", strip=True) if len(cells) > 2 else None,
+                        "previous_match": cells[3].get_text(" ", strip=True) if len(cells) > 3 else None,
+                        "next_match": cells[4].get_text(" ", strip=True) if len(cells) > 4 else None,
+                    }
+                )
+
+    return result
 
