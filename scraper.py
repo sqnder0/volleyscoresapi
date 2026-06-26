@@ -396,9 +396,15 @@ def get_team(team_label: str, team_id: int):
     page = BeautifulSoup(r.text, "html.parser")
 
     result = {
+        "league": str,
         "matches": []
     }
-
+    
+    league = page.find("h4", class_="panel-title")
+    
+    if league:
+        result["league"] = league.get_text(strip=True)
+    
     table = page.select_one("table.table")
 
     if not table:
@@ -416,10 +422,10 @@ def get_team(team_label: str, team_id: int):
             continue
 
         result["matches"].append({
-            "match_code": cells[0].get_text(strip=True),
-            "day": cells[1].get_text(strip=True),
-            "date": cells[2].get_text(strip=True),
-            "time": cells[3].get_text(strip=True),
+            "match_code": cells[1].get_text(strip=True),
+            "day": cells[2].get_text(strip=True),
+            "date": cells[3].get_text(strip=True),
+            "time": cells[4].get_text(strip=True),
             "home_team": _extract_team(teams[0]),
             "away_team": _extract_team(teams[1]),
             "venue": cells[7].get_text(strip=True),
