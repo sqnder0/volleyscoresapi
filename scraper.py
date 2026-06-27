@@ -6,6 +6,8 @@ import re
 from bs4 import BeautifulSoup
 import requests
 
+popularity = {}
+
 # Toggle for debug purposes
 HEADLESS=False
 
@@ -357,7 +359,6 @@ def get_club(label: str, club_id: int):
                         "next_match": cells[4].get_text(" ", strip=True) if len(cells) > 4 else None,
                     }
                 )
-
     return result
 
 def _extract_team(td):
@@ -372,6 +373,20 @@ def _extract_team(td):
 
 
 def get_team(team_label: str, team_id: int):
+    popularity[str(team_id)] = popularity.get(str(team_id), 0) + 1
+    
+    if popularity[str(team_id)] >= 2:
+        print(f"({popularity[str(team_id)]}x) {team_label}")
+    
+    name = " ".join(team_label.split(" ")[2:])
+    
+    results = search(name, "ploeg")
+    result = {}
+    
+    for team in results:
+        if team["team_id"] == str(team_id):
+            result = team
+    
     base = "https://www.volleyscores.be/index.php"
 
     params = {
@@ -395,10 +410,7 @@ def get_team(team_label: str, team_id: int):
 
     page = BeautifulSoup(r.text, "html.parser")
 
-    result = {
-        "league": str,
-        "matches": []
-    }
+    result["matches"] = []
     
     league = page.find("h4", class_="panel-title")
     
