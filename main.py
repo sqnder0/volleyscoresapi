@@ -1,5 +1,7 @@
 from fastapi import FastAPI
-from scraper import search, get_club, get_team
+from scraper import search, get_club, get_team, get_ranking
+from fastapi import HTTPException
+from requests.exceptions import HTTPError
 
 app = FastAPI(
     title="Volleyscoresapi",
@@ -32,3 +34,69 @@ def get_club_endpoint(club_label: str, club_id: int):
 @app.get("/api/get/team", tags=["team"])
 def get_team_endpoint(label: str, team_id: int):
     return get_team(label, team_id)
+
+@app.get("/api/search/history/{season}", tags=["search"])
+def search_all(season: int, q: str):
+    try:
+        return search(q, season=season)
+    except HTTPError as e:
+        raise HTTPException(
+            status_code=e.response.status_code if e.response else 502,
+            detail=e.response.text if e.response else str(e),
+        )
+
+
+@app.get("/api/search/club/history/{season}", tags=["search"])
+def search_club(season: int, q: str):
+    try:
+        return search(q, "club", season=season)
+    except HTTPError as e:
+        raise HTTPException(
+            status_code=e.response.status_code if e.response else 502,
+            detail=e.response.text if e.response else str(e),
+        )
+
+
+@app.get("/api/search/team/history/{season}", tags=["search"])
+def search_team(season: int, q: str):
+    try:
+        return search(q, "ploeg", season=season)
+    except HTTPError as e:
+        raise HTTPException(
+            status_code=e.response.status_code if e.response else 502,
+            detail=e.response.text if e.response else str(e),
+        )
+
+
+@app.get("/api/get/club/history/{season}", tags=["club"])
+def get_club_endpoint(season: int, club_label: str, club_id: int):
+    try:
+        return get_club(club_label, club_id, season=season)
+    except HTTPError as e:
+        raise HTTPException(
+            status_code=e.response.status_code if e.response else 502,
+            detail=e.response.text if e.response else str(e),
+        )
+
+
+@app.get("/api/get/team/history/{season}", tags=["team"])
+def get_team_endpoint(season: int, label: str, team_id: int):
+    try:
+        return get_team(label, team_id, season=season)
+    except HTTPError as e:
+        raise HTTPException(
+            status_code=e.response.status_code if e.response else 502,
+            detail=e.response.text if e.response else str(e),
+        )
+
+@app.get("/api/get/league")
+def get_ranking_endpoint(label: str, season: int=2026):
+    result = get_ranking(label, season)
+    
+    if result == None:
+        raise HTTPException(
+            status_code=404,
+            detail="League not found"
+        )
+    else:
+        return result

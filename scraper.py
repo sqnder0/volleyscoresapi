@@ -6,202 +6,21 @@ import re
 from bs4 import BeautifulSoup
 import requests
 
-popularity = {}
-
 # Toggle for debug purposes
 HEADLESS=False
+CURRENT_SE = 13
+
+def get_se(season: int):
+    return season - 2013
+
+def get_base(s: int | None = None):
+    base = f"https://www.volleyscores.be/history/{s}/index.php" if s else "https://www.volleyscores.be/index.php"
+    return base
 
 # TODO: Add a custom club, reeks and ploeg class that can be jsonified.
-# TODO: Just return a list of possibilities if multiple possible results.
-def get(q:str, search_type: Literal['club', 'ploeg']) -> dict:
-    """
-    Use the search box on volleyscores
-    Args:
-        q (str): Your query
-        search_type (Literal['club', 'reeks', 'ploeg']): Type of search - 'club', 'reeks', or 'ploeg'
-    Returns:
-        dict: A list of all options if multiple, the first option if only one.
-    """
-    
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS)  # Run headless browser
-        page = browser.new_page()
-        page.goto("https://www.volleyscores.be/", wait_until="networkidle")
-        
-        cookie = page.locator("#cookieChecker")
-        if cookie.is_visible():
-            cookie.get_by_role("button", name="Akkoord", exact=True).click()
-        
-        page.fill("#searcher", q)
-        
-        section_labels = {
-            "club": "Clubs",
-            "reeks": "Reeksen",
-            "ploeg": "Ploegen",
-        }
-
-        suggestions = page.locator("div.autocomplete-suggestions > div")
-        target = suggestions.filter(has_text=section_labels[search_type]).first
-        target.wait_for()
-
-        next_div = target.locator("xpath=following-sibling::div[1]")
-        next_div.wait_for(state="visible")
-        next_div.click()
-
-        # Wait for page to load
-        page.wait_for_function("""
-        () => document.querySelector('.gts.t')?.value?.trim().length > 0
-        """)
-        
-        result = {}
-        
-        if search_type == "club":
-            result["name"] = page.locator(".teamtitle").inner_text()
-            result["id"] = result["name"].split(" ")[1]
-            
-            info_rows = page.locator("#reqContent .col-md-4 .col-xs-12")
-            for i in range(info_rows.count()):
-                row = info_rows.nth(i)
-                label = row.locator("label").inner_text().strip()
-                value = row.locator(".col-xs-9").inner_text().strip()
-
-                if label == "Voorzitter":
-                    result["president"] = value
-                elif label == "Secretaris":
-                    result["secretary"] = value
-                elif label == "Website":
-                    result["website"] = row.locator("a").get_attribute("href")
-
-            result["competition_teams"] = []
-            result["cup_teams"] = []
-            
-            tables = page.locator("#reqContent table")
-            
-            if tables.count() > 0:
-                competition_rows = tables.nth(0).locator("tbody tr")
-                for i in range(competition_rows.count()):
-                    row = competition_rows.nth(i)
-                    result["competition_teams"].append({
-                        "series": row.locator(".hidden-xs.serie").inner_text().strip(),
-                        "team": row.locator(".hidden-xs.team").inner_text().strip(),
-                        "next_match": row.locator(".hidden-xs").nth(4).inner_text().strip(),
-                    })
-            if tables.count() > 1:
-                cup_rows = tables.nth(1).locator("tbody tr")
-                for i in range(cup_rows.count()):
-                    row = cup_rows.nth(i)
-                    result["cup_teams"].append({
-                        "series": row.locator(".hidden-xs.serie").inner_text().strip(),
-                        "team": row.locator(".hidden-xs.team").inner_text().strip(),
-                        "next_match": row.locator(".hidden-xs").nth(4).inner_text().strip(),
-                    })
-        if search_type == "ploeg":
-            title = page.locator('.teamtitle').inner_text().strip()
-            if title.lower().startswith('ploeg '):
-                title = title[len('Ploeg '):].strip()
-
-            series = ''
-            m = re.search(r"\(([^)]+)\)", page.locator('.teamtitle').inner_text() or '')
-            if m:
-                series = m.group(1).strip()
-
-            team_id = page.locator('input.gts[data-gt="ti"]').get_attribute('value')
-
-            result['team_name'] = title
-            result['series'] = series
-            result['team_id'] = team_id
-
-            result['matches'] = []
-
-            def _parse_loadpage_args(onclick) -> list:
-                if not onclick:
-                    return []
-                inside = onclick[onclick.find('(') + 1: onclick.rfind(')')]
-                tokens = re.findall(r"'([^']*)'|(\d+)", inside)
-                return [a if a else b for a, b in tokens]
-
-            rows = page.locator('#reqContent table tbody tr')
-            for i in range(rows.count()):
-                row = rows.nth(i)
-
-                match_cell = row.locator('td.hidden-xs.match[onclick]').first
-
-                if match_cell.count() == 0:
-                    continue
-
-                code = match_cell.inner_text().strip()
-                onclick = match_cell.get_attribute('onclick')
-
-                if not onclick:
-                    continue
-
-                args = _parse_loadpage_args(onclick)
-
-
-                hidden_cells = row.locator('td.hidden-xs')
-                day = date = time = home = visitors = sporthal = result_text = sets = ''
-                try:
-                    if hidden_cells.count() > 1:
-                        day = hidden_cells.nth(1).inner_text().strip()
-                        date = hidden_cells.nth(2).inner_text().strip()
-                        time = hidden_cells.nth(3).inner_text().strip()
-                        home = hidden_cells.nth(4).inner_text().strip()
-                        if hidden_cells.count() > 5:
-                            visitors = hidden_cells.nth(5).inner_text().strip()
-                        if hidden_cells.count() > 6:
-                            sporthal = hidden_cells.nth(6).inner_text().strip()
-                        if hidden_cells.count() > 7:
-                            result_text = hidden_cells.nth(7).inner_text().strip()
-                        if hidden_cells.count() > 8:
-                            sets = hidden_cells.nth(8).inner_text().strip()
-                except Exception:
-                    pass
-
-                match_id = None
-                sporthall_id = None
-                try:
-                    if len(args) > 7 and args[7].isdigit():
-                        match_id = args[7]
-                    if len(args) > 8 and args[8].isdigit():
-                        sporthall_id = args[8]
-                except Exception:
-                    pass
-
-                sporthal_cell = row.locator('td.sporthal')
-                if sporthal_cell.count() > 0:
-                    sh_onclick = sporthal_cell.nth(0).get_attribute('onclick')
-                    sh_args = _parse_loadpage_args(sh_onclick)
-                    try:
-                        for token in reversed(sh_args):
-                            if token.isdigit():
-                                sporthall_id = token
-                                break
-                    except Exception:
-                        pass
-
-                result['matches'].append({
-                    'code': code,
-                    'day': day,
-                    'date': date,
-                    'time': time,
-                    'home': home,
-                    'visitors': visitors,
-                    'sporthal': sporthal,
-                    'match_id': match_id,
-                    'sporthall_id': sporthall_id,
-                    'result': result_text,
-                    'sets': sets,
-                })
-            
-        browser.close()
-
-    return result
-
-
-def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
+def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: str | None = None):
     r = requests.get(
-        "https://www.volleyscores.be/index.php",
+        get_base(season),
         params={
             "v": 2,
             "lng": "nl",
@@ -248,8 +67,8 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None):
         }
 
 
-def get_club(label: str, club_id: int):
-    base = "https://www.volleyscores.be/index.php"
+def get_club(label: str, club_id: int , season: str | None = None):
+    base = get_base(season)
 
     params = {
         "v": "2",
@@ -372,22 +191,10 @@ def _extract_team(td):
     }
 
 
-def get_team(team_label: str, team_id: int):
-    popularity[str(team_id)] = popularity.get(str(team_id), 0) + 1
-    
-    if popularity[str(team_id)] >= 2:
-        print(f"({popularity[str(team_id)]}x) {team_label}")
-    
-    name = " ".join(team_label.split(" ")[2:])
-    
-    results = search(name, "ploeg")
+def get_team(team_label: str, team_id: int , season: str | None = None):
     result = {}
     
-    for team in results:
-        if team["team_id"] == str(team_id):
-            result = team
-    
-    base = "https://www.volleyscores.be/index.php"
+    base = get_base(season)
 
     params = {
         "v": "2",
@@ -411,6 +218,7 @@ def get_team(team_label: str, team_id: int):
     page = BeautifulSoup(r.text, "html.parser")
 
     result["matches"] = []
+    result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
     
     league = page.find("h4", class_="panel-title")
     
@@ -443,5 +251,136 @@ def get_team(team_label: str, team_id: int):
             "venue": cells[7].get_text(strip=True),
             "result": cells[8].get_text(strip=True),
         })
+
+    return result
+
+def get_league(q: str, season: str | None = None):
+    se = get_se(season)
+    
+    r = requests.get(
+        get_base(),
+        params={
+            "v": 2,
+            "lng": "nl",
+            "a": "ac",
+            "se": se,
+            "query": q,
+        },
+        timeout=10,
+    )
+
+    r.raise_for_status()
+    data = r.json()    
+    league = None
+    
+    for item in data["suggestions"]:
+        if item["data"]["category"] == "Reeksen":
+            league = {
+                "label": item["value"],
+                "league_id": item["data"]["fields"]["ssi"],
+            }
+    
+    if league != None:
+        return league
+    else:
+        return None
+
+def get_ranking(series_label: str, season: str | None = None):
+    se = get_se(season)
+    league = get_league(series_label, season=season)
+
+    if league is None or league.get("label", "").lower() != series_label.lower():
+        return None
+
+    series_id = league["league_id"]
+    base = get_base()
+
+    params = {
+        "v": "2",
+        "ss": "0",
+        "isActiveSeason": "1",
+        "t": series_label,
+        "a": "sd",
+        "se": se,
+        "ssi": str(series_id),
+        "st": "%",
+        "w": "%",
+        "lng": "nl",
+    }
+
+    r = requests.get(
+        base,
+        params=params,
+        timeout=10,
+    )
+    r.raise_for_status()
+
+    page = BeautifulSoup(r.text, "html.parser")
+
+    result = {
+        "series": series_label,
+        "series_id": series_id,
+        "ranking": [],
+    }
+
+    # Handle error or unavailable alert message
+    alert = page.find("div", class_="alert")
+    if alert and "niet beschikbaar" in alert.text.lower():
+        result["alert"] = alert.get_text(" ", strip=True)
+        return result
+
+    tables = page.select("table.table")
+
+    for table in tables:
+        # Extract desktop table headers
+        headers = [
+            th.get_text(" ", strip=True) for th in table.select("thead tr.hidden-xs th")
+        ]
+
+        # Ensure table is a ranking table
+        if "Ploeg" not in headers or "Ptn" not in headers:
+            continue
+
+        for row in table.select("tbody tr"):
+            # Select only the desktop tds (td.hidden-xs) to avoid mobile cell duplicates
+            tds = row.select("td.hidden-xs")
+            if not tds:
+                continue
+
+            cell_texts = [td.get_text(" ", strip=True) for td in tds]
+
+            # Extract team_id from onclick attribute
+            team_td = row.select_one("td.hidden-xs.team")
+            team_id = None
+            if team_td and team_td.has_attr("onclick"):
+                match = re.search(
+                    r"loadPage\([^)]*?'(\d+)'[^)]*\)", team_td["onclick"]
+                )
+                if match:
+                    team_id = int(match.group(1))
+
+            try:
+                entry = {
+                    "position": cell_texts[0].rstrip("."),
+                    "team": cell_texts[1],
+                    "team_id": team_id,
+                    "points": int(cell_texts[2]),
+                    "played": int(cell_texts[3]),
+                    "won_3_0_3_1": int(cell_texts[4]),
+                    "won_3_2": int(cell_texts[5]),
+                    "lost_3_0_3_1": int(cell_texts[6]),
+                    "lost_3_2": int(cell_texts[7]),
+                    "sets_won": int(cell_texts[8]),
+                    "sets_lost": int(cell_texts[9]),
+                    "forfeits": int(cell_texts[10]) if len(cell_texts) > 10 else 0,
+                }
+            except (ValueError, IndexError):
+                # Fallback to raw values if mapping fails
+                entry = cell_texts
+
+            result["ranking"].append(entry)
+
+        if result["ranking"]:
+            break
 
     return result
