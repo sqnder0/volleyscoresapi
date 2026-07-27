@@ -217,7 +217,7 @@ def get_team(team_label: str, team_id: int , season: str | None = None):
 
     page = BeautifulSoup(r.text, "html.parser")
     
-    name = page.find("div", class_="teamtitle")
+    name = page.find("div", class_="teamtitle").get_text(strip=True)
     
     name = re.sub(r"\s*\(.*?\)", "", name).removeprefix("Ploeg ").strip()
     
