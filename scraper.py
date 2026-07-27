@@ -10,15 +10,19 @@ import requests
 HEADLESS=False
 CURRENT_SE = 13
 
-def get_se(season: int):
-    return season - 2013
+def get_se(season: int | None):
+    if season:
+        return season - 2013
+    else:
+        return CURRENT_SE
+
 
 def get_base(s: int | None = None):
     base = f"https://www.volleyscores.be/history/{s}/index.php" if s else "https://www.volleyscores.be/index.php"
     return base
 
 # TODO: Add a custom club, reeks and ploeg class that can be jsonified.
-def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: str | None = None):
+def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: int | None = None):
     r = requests.get(
         get_base(season),
         params={
@@ -67,7 +71,7 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: 
         }
 
 
-def get_club(label: str, club_id: int , season: str | None = None):
+def get_club(label: str, club_id: int , season: int | None = None):
     base = get_base(season)
 
     params = {
@@ -191,7 +195,7 @@ def _extract_team(td):
     }
 
 
-def get_team(team_label: str, team_id: int , season: str | None = None):
+def get_team(team_label: str, team_id: int , season: int | None = None):
     result = {}
     
     base = get_base(season)
@@ -217,7 +221,13 @@ def get_team(team_label: str, team_id: int , season: str | None = None):
 
     page = BeautifulSoup(r.text, "html.parser")
     
-    name = page.find("div", class_="teamtitle").get_text(strip=True)
+    name = page.find("div", class_="teamtitle") 
+    
+    if name:
+        name = name.get_text()
+    else:
+        name = team_label
+    
 
     depth = 0
     start = None
@@ -268,112 +278,113 @@ def get_team(team_label: str, team_id: int , season: str | None = None):
             "result": cells[8].get_text(strip=True),
         })
 
+    result["ranking"] = _parse_ranking_table(page)
+    
     return result
 
-def get_league(q: str, season: str | None = None):
-    se = get_se(season)
-    
+
+def get_league(q: str, season: int | None = None):
+    se = get_se(season) if season else get_se(2026)
+
     r = requests.get(
         get_base(),
-        params={
-            "v": 2,
-            "lng": "nl",
-            "a": "ac",
-            "se": se,
-            "query": q,
-        },
+        params={"v": 2, "lng": "nl", "a": "ac", "se": se, "query": q},
         timeout=10,
     )
-
     r.raise_for_status()
-    data = r.json()    
+    data = r.json()
     league = None
-    
+
     for item in data["suggestions"]:
         if item["data"]["category"] == "Reeksen":
             league = {
                 "label": item["value"],
                 "league_id": item["data"]["fields"]["ssi"],
             }
-    
-    if league != None:
-        return league
-    else:
+
+    if league is None:
         return None
 
-def get_ranking(series_label: str, season: str | None = None):
-    se = get_se(season)
-    league = get_league(series_label, season=season)
-
-    if league is None or league.get("label", "").lower() != series_label.lower():
-        return None
-
-    series_id = league["league_id"]
+    # Fetch the ranking page — same endpoint/table markup get_ranking() uses —
+    # and attach the parsed ranking to this league.
     base = get_base()
-
     params = {
-        "v": "2",
-        "ss": "0",
-        "isActiveSeason": "1",
-        "t": series_label,
-        "a": "sd",
-        "se": se,
-        "ssi": str(series_id),
-        "st": "%",
-        "w": "%",
-        "lng": "nl",
+        "v": "2", "ss": "0", "isActiveSeason": "1",
+        "t": league["label"], "a": "sd", "se": se,
+        "ssi": str(league["league_id"]), "st": "%", "w": "%", "lng": "nl",
     }
 
-    r = requests.get(
-        base,
-        params=params,
-        timeout=10,
-    )
+    r = requests.get(base, params=params, timeout=10)
     r.raise_for_status()
-
     page = BeautifulSoup(r.text, "html.parser")
 
-    result = {
-        "series": series_label,
-        "series_id": series_id,
-        "ranking": [],
+    ranking, alert_text = _parse_ranking_table(page)
+    league["ranking"] = ranking
+    if alert_text:
+        league["alert"] = alert_text
+
+    return league
+
+def get_ranking(series_label: str, league_id, season: int = 2026):
+    se = get_se(season)
+
+    if league_id is None:
+        league = get_league(series_label, season=season)
+        if league is None or league.get("label", "").lower() != series_label.lower():
+            return None
+        series_id = league["league_id"]
+    else:
+        series_id = league_id
+
+    base = get_base()
+    params = {
+        "v": "2", "ss": "0", "isActiveSeason": "1",
+        "t": series_label, "a": "sd", "se": se,
+        "ssi": str(series_id), "st": "%", "w": "%", "lng": "nl",
     }
 
-    # Handle error or unavailable alert message
+    r = requests.get(base, params=params, timeout=10)
+    r.raise_for_status()
+    page = BeautifulSoup(r.text, "html.parser")
+
+    result = {"series": series_label, "series_id": series_id, "ranking": []}
+    ranking, alert_text = _parse_ranking_table(page)
+    result["ranking"] = ranking
+    if alert_text:
+        result["alert"] = alert_text
+
+    return result
+
+def _parse_ranking_table(page: BeautifulSoup):
+    """Shared table-parsing logic for the ranking table (table.table with
+    'Ploeg'/'Ptn' headers). Used by both get_ranking() and get_league()."""
+    ranking = []
+
     alert = page.find("div", class_="alert")
     if alert and "niet beschikbaar" in alert.text.lower():
-        result["alert"] = alert.get_text(" ", strip=True)
-        return result
+        return ranking, alert.get_text(" ", strip=True)
 
-    tables = page.select("table.table")
-
-    for table in tables:
-        # Extract desktop table headers
+    for table in page.select("table.table"):
         headers = [
             th.get_text(" ", strip=True) for th in table.select("thead tr.hidden-xs th")
         ]
 
-        # Ensure table is a ranking table
         if "Ploeg" not in headers or "Ptn" not in headers:
             continue
 
         for row in table.select("tbody tr"):
-            # Select only the desktop tds (td.hidden-xs) to avoid mobile cell duplicates
             tds = row.select("td.hidden-xs")
             if not tds:
                 continue
 
             cell_texts = [td.get_text(" ", strip=True) for td in tds]
 
-            # Extract team_id from onclick attribute
             team_td = row.select_one("td.hidden-xs.team")
             team_id = None
             if team_td and team_td.has_attr("onclick"):
-                match = re.search(
-                    r"loadPage\([^)]*?'(\d+)'[^)]*\)", team_td["onclick"]
-                )
-                if match:
-                    team_id = int(match.group(1))
+                m = re.search(r"loadPage\([^)]*?'(\d+)'[^)]*\)", str(team_td["onclick"]))
+                if m:
+                    team_id = int(m.group(1))
 
             try:
                 entry = {
@@ -391,12 +402,11 @@ def get_ranking(series_label: str, season: str | None = None):
                     "forfeits": int(cell_texts[10]) if len(cell_texts) > 10 else 0,
                 }
             except (ValueError, IndexError):
-                # Fallback to raw values if mapping fails
                 entry = cell_texts
 
-            result["ranking"].append(entry)
+            ranking.append(entry)
 
-        if result["ranking"]:
+        if ranking:
             break
 
-    return result
+    return ranking, None

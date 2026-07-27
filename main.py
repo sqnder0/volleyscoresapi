@@ -36,7 +36,7 @@ def get_team_endpoint(label: str, team_id: int):
     return get_team(label, team_id)
 
 @app.get("/api/search/history/{season}", tags=["search"])
-def search_all(season: int, q: str):
+def search_all_history(season: int, q: str):
     try:
         return search(q, season=season)
     except HTTPError as e:
@@ -47,7 +47,7 @@ def search_all(season: int, q: str):
 
 
 @app.get("/api/search/club/history/{season}", tags=["search"])
-def search_club(season: int, q: str):
+def search_club_history(season: int, q: str):
     try:
         return search(q, "club", season=season)
     except HTTPError as e:
@@ -58,7 +58,7 @@ def search_club(season: int, q: str):
 
 
 @app.get("/api/search/team/history/{season}", tags=["search"])
-def search_team(season: int, q: str):
+def search_team_history(season: int, q: str):
     try:
         return search(q, "ploeg", season=season)
     except HTTPError as e:
@@ -69,7 +69,7 @@ def search_team(season: int, q: str):
 
 
 @app.get("/api/get/club/history/{season}", tags=["club"])
-def get_club_endpoint(season: int, club_label: str, club_id: int):
+def get_club_endpoint_history(season: int, club_label: str, club_id: int):
     try:
         return get_club(club_label, club_id, season=season)
     except HTTPError as e:
@@ -80,7 +80,7 @@ def get_club_endpoint(season: int, club_label: str, club_id: int):
 
 
 @app.get("/api/get/team/history/{season}", tags=["team"])
-def get_team_endpoint(season: int, label: str, team_id: int):
+def get_team_endpoint_history(season: int, label: str, team_id: int):
     try:
         return get_team(label, team_id, season=season)
     except HTTPError as e:
@@ -90,8 +90,8 @@ def get_team_endpoint(season: int, label: str, team_id: int):
         )
 
 @app.get("/api/get/league")
-def get_ranking_endpoint(label: str, season: int=2026):
-    result = get_ranking(label, season)
+def get_ranking_endpoint(label: str, league_id: int | None, season: int=2026):
+    result = get_ranking(label, league_id, season)
     
     if result == None:
         raise HTTPException(
