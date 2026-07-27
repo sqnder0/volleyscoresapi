@@ -216,14 +216,20 @@ def get_team(team_label: str, team_id: int , season: str | None = None):
     r.raise_for_status()
 
     page = BeautifulSoup(r.text, "html.parser")
-
-    result["matches"] = []
-    result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
+    
+    name = page.find("div", _class="teamtitle")
+    
+    name = re.sub(r"\s*\(.*?\)", "", name).removeprefix("Ploeg ").strip()
     
     league = page.find("h4", class_="panel-title")
     
+    result["name"] = name
+    
     if league:
         result["league"] = league.get_text(strip=True)
+
+    result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
+    result["matches"] = []
     
     table = page.select_one("table.table")
 
