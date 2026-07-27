@@ -219,13 +219,23 @@ def get_team(team_label: str, team_id: int , season: str | None = None):
     
     name = page.find("div", class_="teamtitle").get_text(strip=True)
 
-    match = re.search(r"\s*\(([^()]*)\)\s*$", name)
-    if match:
-        result["league"] = match.group(1).strip()
-        name = re.sub(r"\s*\([^()]*\)\s*$", "", name)
+    depth = 0
+    start = None
+
+    for i in range(len(name) - 1, -1, -1):
+        if name[i] == ")":
+            depth += 1
+        elif name[i] == "(":
+            depth -= 1
+            if depth == 0:
+                start = i
+                break
+
+    if start is not None:
+        result["league"] = name[start + 1:-1].strip()
+        name = name[:start].rstrip()
 
     name = name.removeprefix("Ploeg ").strip()
-
     result["name"] = name
 
     result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
