@@ -361,8 +361,11 @@ def _parse_ranking_table(page: BeautifulSoup):
     ranking = []
 
     alert = page.find("div", class_="alert")
-    if alert and "niet beschikbaar" in alert.text.lower():
-        return ranking, alert.get_text(" ", strip=True)
+    if alert:
+        if "niet beschikbaar" in alert.text.lower():
+            return ranking, alert.get_text(" ", strip=True)
+        else:
+            alert = alert.get_text(strip=True)
 
     for table in page.select("table.table"):
         headers = [
@@ -409,4 +412,4 @@ def _parse_ranking_table(page: BeautifulSoup):
         if ranking:
             break
 
-    return ranking, None
+    return ranking, alert
