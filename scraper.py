@@ -2,34 +2,39 @@ from playwright.sync_api import sync_playwright, expect
 from playwright.sync_api import Locator
 from typing import Literal
 from urllib.parse import urlencode
+from datetime import date
 import re
 from bs4 import BeautifulSoup
 import requests
 
-# Toggle for debug purposes
-HEADLESS=False
-CURRENT_SE = 13
+HEADLESS = False
 
-def get_se(season: int | None):
+
+def current_season_year(today: date | None = None) -> int:
+    today = today or date.today()
+    if (today.month, today.day) >= (6, 1):
+        return today.year
+    return today.year - 1
+
+
+def get_se(season: int | None = None) -> int:
     if season:
         return season - 2013
-    else:
-        return CURRENT_SE
+    return current_season_year() - 2013
 
 
-def get_base(s: int | None = None):
-    base = f"https://www.volleyscores.be/history/{s}/index.php" if s else "https://www.volleyscores.be/index.php"
-    return base
+def get_base() -> str:
+    return "https://www.volleyscores.be/index.php"
 
-# TODO: Add a custom club, reeks and ploeg class that can be jsonified.
+
 def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: int | None = None):
     r = requests.get(
-        get_base(season),
+        get_base(),
         params={
             "v": 2,
             "lng": "nl",
             "a": "ac",
-            "se": 13,
+            "se": get_se(season),
             "query": q,
         },
         timeout=10,
@@ -37,10 +42,10 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: 
 
     r.raise_for_status()
     data = r.json()
-    
+
     clubs = []
     teams = []
-    
+
     for item in data["suggestions"]:
         if item["data"]["category"] == "Clubs":
             club = {
@@ -58,28 +63,28 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: 
                 "name": " ".join(item["value"].split(" ")[2:]),
             }
             teams.append(team)
-            
+
     if search_type == "club":
         return clubs
-    
+
     if search_type == "ploeg":
         return teams
-    
+
     return {
             "clubs": clubs,
             "teams": teams,
         }
 
 
-def get_club(label: str, club_id: int , season: int | None = None):
-    base = get_base(season)
+def get_club(label: str, club_id: int, season: int | None = None):
+    base = get_base()
 
     params = {
         "v": "2",
         "isActiveSeason": "1",
         "t": f"Club {label}",
         "a": "cc",
-        "se": "13",
+        "se": str(get_se(season)),
         "ci": str(club_id),
         "lng": "nl",
     }
@@ -149,8 +154,6 @@ def get_club(label: str, club_id: int , season: int | None = None):
 
                 if onclick:
                     inside = str(onclick).split("(", 1)[1].rsplit(")", 1)[0]
-
-                    # split args more safely
                     raw_args = re.findall(r"'[^']*'|\d+", inside)
 
                     candidates = []
@@ -164,11 +167,9 @@ def get_club(label: str, club_id: int , season: int | None = None):
                         if a.isdigit():
                             num = int(a)
 
-                            # heuristic filter: adjust if needed
                             if 1000 <= num <= 10_000_000:
                                 candidates.append(num)
 
-                    # pick the best candidate (usually only one)
                     if len(candidates) == 1:
                         team_id = candidates[0]
 
@@ -184,6 +185,7 @@ def get_club(label: str, club_id: int , season: int | None = None):
                 )
     return result
 
+
 def _extract_team(td):
     onclick = td.get("onclick", "")
 
@@ -195,10 +197,10 @@ def _extract_team(td):
     }
 
 
-def get_team(team_label: str, team_id: int , season: int | None = None):
+def get_team(team_label: str, team_id: int, season: int | None = None):
     result = {}
-    
-    base = get_base(season)
+
+    base = get_base()
 
     params = {
         "v": "2",
@@ -206,7 +208,7 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
         "isActiveSeason": "1",
         "t": f"Ploeg {team_label}",
         "a": "t",
-        "se": "13",
+        "se": str(get_se(season)),
         "ti": str(team_id),
         "lng": "nl",
     }
@@ -220,29 +222,30 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
     r.raise_for_status()
 
     page = BeautifulSoup(r.text, "html.parser")
-    
-    name = page.find("div", class_="teamtitle") 
-    
+
+    name = page.find("div", class_="teamtitle")
+
     if name:
-        name = name.get_text()
+        name = name.get_text(strip=True)
     else:
         name = team_label
-    
 
-    depth = 0
+    end = name.rfind(")")
     start = None
 
-    for i in range(len(name) - 1, -1, -1):
-        if name[i] == ")":
-            depth += 1
-        elif name[i] == "(":
-            depth -= 1
-            if depth == 0:
-                start = i
-                break
+    if end != -1:
+        depth = 0
+        for i in range(end, -1, -1):
+            if name[i] == ")":
+                depth += 1
+            elif name[i] == "(":
+                depth -= 1
+                if depth == 0:
+                    start = i
+                    break
 
     if start is not None:
-        result["league"] = name[start + 1:-1].strip()
+        result["league"] = name[start + 1:end].strip()
         name = name[:start].rstrip()
 
     name = name.removeprefix("Ploeg ").strip()
@@ -250,7 +253,7 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
 
     result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
     result["matches"] = []
-    
+
     table = page.select_one("table.table")
 
     if not table:
@@ -279,12 +282,12 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
         })
 
     result["ranking"] = _parse_ranking_table(page)
-    
+
     return result
 
 
 def get_league(q: str, season: int | None = None):
-    se = get_se(season) if season else get_se(2026)
+    se = get_se(season)
 
     r = requests.get(
         get_base(),
@@ -305,8 +308,6 @@ def get_league(q: str, season: int | None = None):
     if league is None:
         return None
 
-    # Fetch the ranking page — same endpoint/table markup get_ranking() uses —
-    # and attach the parsed ranking to this league.
     base = get_base()
     params = {
         "v": "2", "ss": "0", "isActiveSeason": "1",
@@ -325,7 +326,8 @@ def get_league(q: str, season: int | None = None):
 
     return league
 
-def get_ranking(series_label: str, league_id, season: int = 2026):
+
+def get_ranking(series_label: str, league_id, season: int | None = None):
     se = get_se(season)
 
     if league_id is None:
@@ -355,9 +357,8 @@ def get_ranking(series_label: str, league_id, season: int = 2026):
 
     return result
 
+
 def _parse_ranking_table(page: BeautifulSoup):
-    """Shared table-parsing logic for the ranking table (table.table with
-    'Ploeg'/'Ptn' headers). Used by both get_ranking() and get_league()."""
     ranking = []
 
     alert = page.find("div", class_="alert")
