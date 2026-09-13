@@ -222,11 +222,32 @@ def _fetch_club(label: str, club_id: int, season: int | None = None):
                         "team": team.get_text(" ", strip=True),
                         "id": team_id,
                         "ranking": cells[2].get_text(" ", strip=True) if len(cells) > 2 else None,
-                        "previous_match": cells[3].get_text(" ", strip=True) if len(cells) > 3 else None,
-                        "next_match": cells[4].get_text(" ", strip=True) if len(cells) > 4 else None,
+                        "previous_match": _parse_match_summary_cell(cells[3]) if len(cells) > 3 else None,
+                        "next_match": _parse_match_summary_cell(cells[4]) if len(cells) > 4 else None,
                     }
                 )
     return result
+
+
+def _parse_match_summary_cell(cell):
+    """The club page's previous/next-match cell has no separate elements
+    per field, just plain text lines split by <br> ("date time" / "home
+    team -" / "away team" / optional "result (sets)"). get_text(sep)
+    inserts sep between text nodes regardless of the <br> tags between
+    them, which happens to split it back into those lines cleanly."""
+    parts = cell.get_text("|", strip=True).split("|")
+    if len(parts) < 3:
+        return None
+
+    date, _, time = parts[0].partition(" ")
+
+    return {
+        "date": date,
+        "time": time,
+        "home_team": parts[1].rstrip("-").strip(),
+        "away_team": parts[2].strip(),
+        "result": parts[3].split("(", 1)[0].strip() if len(parts) > 3 else "",
+    }
 
 def _extract_team(td):
     onclick = td.get("onclick", "")

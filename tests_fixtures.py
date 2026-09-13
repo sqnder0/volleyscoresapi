@@ -78,6 +78,36 @@ class TestGetClubFixture(unittest.TestCase):
         get_club("Mendo Booischot", 10911)
         self.assertEqual(mock_get.call_count, 1)
 
+    def test_team_next_match_is_structured_not_a_text_blob(self, mock_get):
+        club = get_club("Mendo Booischot", 10911)
+        team = next(
+            t for t in club["competition_teams"] if t["team"] == "Mendo Booischot A"
+        )
+        self.assertEqual(
+            team["next_match"],
+            {
+                "date": "20/09/2026",
+                "time": "17:00",
+                "home_team": "Volley Noorderkempen A",
+                "away_team": "Mendo Booischot A",
+                "result": "",
+            },
+        )
+
+    def test_previous_match_carries_a_result(self, mock_get):
+        club = get_club("Mendo Booischot", 10911)
+        team = next(
+            t for t in club["competition_teams"] if t["team"] == "Mendo Booischot A"
+        )
+        self.assertEqual(team["previous_match"]["result"], "0 - 3")
+
+    def test_missing_previous_match_is_none(self, mock_get):
+        club = get_club("Mendo Booischot", 10911)
+        team = next(
+            t for t in club["competition_teams"] if t["team"] == "Mendo Booischot D"
+        )
+        self.assertIsNone(team["previous_match"])
+
 
 @patch("scraper._session.get", side_effect=_fake_get)
 class TestGetTeamFixture(unittest.TestCase):

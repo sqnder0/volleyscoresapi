@@ -25,6 +25,22 @@ class TestGetClub(unittest.TestCase):
         self.assertIn("series", first)
         self.assertIn("team", first)
 
+    def test_next_and_previous_match_are_structured(self):
+        """Each team's next/previous match used to be one flattened text
+        blob (the club page's cell has no separate elements per field, just
+        <br>-joined lines) - now parsed into date/time/home_team/away_team/
+        result so the client can render and color it like any other
+        match, instead of just displaying raw text."""
+        club = get_club("Mendo Booischot", 10911)
+        teams_with_a_next_match = [
+            t for t in club["competition_teams"] if t["next_match"] is not None
+        ]
+        self.assertTrue(len(teams_with_a_next_match) > 0)
+
+        next_match = teams_with_a_next_match[0]["next_match"]
+        for field in ("date", "time", "home_team", "away_team", "result"):
+            self.assertIn(field, next_match)
+
 
 class TestGetTeam(unittest.TestCase):
     """Regression coverage for the ranking bug: get_team() used to assign
