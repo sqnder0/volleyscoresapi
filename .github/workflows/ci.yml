@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Fixture/unit suites only - no network dependency, so they're fast and
+      # reliable in CI. The live suite (tests.py) runs volleyscores.be
+      # requests and is a separate scheduled canary (see canary.yml), not a
+      # per-push gate. Listed explicitly rather than `unittest discover`,
+      # since tests.py's name would otherwise match the same "test*.py"
+      # pattern and pull the live suite into every push.
+      - name: Run fast tests
+        run: python -m unittest tests_fixtures.py test_ttl_cache.py test_session_retry.py -v

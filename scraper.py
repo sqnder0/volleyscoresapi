@@ -4,6 +4,36 @@ from datetime import date
 import re
 from bs4 import BeautifulSoup
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from ttl_cache import TTLCache
+
+# Shared session so every request benefits from the same retry/backoff
+# policy - a single transient failure against volleyscores.be (a
+# connection blip, a momentary 502/503/504) shouldn't surface as an error
+# to the app when a couple of quick retries would have succeeded.
+_session = requests.Session()
+_retry = Retry(
+    total=3,
+    backoff_factor=0.5,
+    status_forcelist=[502, 503, 504],
+    allowed_methods=["GET"],
+    # Once retries are exhausted, hand back the last response instead of
+    # raising RetryError - our own raise_for_status() calls below then
+    # raise the HTTPError that main.py's endpoints already catch, instead
+    # of an unhandled exception type surfacing as a raw 500.
+    raise_on_status=False,
+)
+_session.mount("https://", HTTPAdapter(max_retries=_retry))
+_session.mount("http://", HTTPAdapter(max_retries=_retry))
+
+# Short-TTL caches for the two most expensive/most-repeated scrapes.
+# Keyed on (id, se) - not on the caller-supplied label, which varies
+# textually (whitespace, differing suffixes) without changing what's
+# actually fetched, since the site looks the page up by id.
+_team_cache = TTLCache(ttl_seconds=180)
+_club_cache = TTLCache(ttl_seconds=180)
 
 
 def current_season_year(today: date | None = None) -> int:
@@ -26,7 +56,7 @@ def get_base(s: int | None = None):
 
 # TODO: Add a custom club, reeks and ploeg class that can be jsonified.
 def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: int | None = None):
-    r = requests.get(
+    r = _session.get(
         get_base(season),
         params={
             "v": 2,
@@ -74,7 +104,18 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: 
         }
 
 
-def get_club(label: str, club_id: int , season: int | None = None):
+def get_club(label: str, club_id: int, season: int | None = None):
+    cache_key = (club_id, get_se(season))
+    cached = _club_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = _fetch_club(label, club_id, season)
+    _club_cache.set(cache_key, result)
+    return result
+
+
+def _fetch_club(label: str, club_id: int, season: int | None = None):
     base = get_base(season)
 
     params = {
@@ -87,7 +128,7 @@ def get_club(label: str, club_id: int , season: int | None = None):
         "lng": "nl",
     }
 
-    r = requests.get(
+    r = _session.get(
         f"{base}?{urlencode(params)}",
         timeout=10,
     )
@@ -208,9 +249,20 @@ def _extract_onclick_id(onclick):
     return int(ids[-1]) if ids else None
 
 
-def get_team(team_label: str, team_id: int , season: int | None = None):
+def get_team(team_label: str, team_id: int, season: int | None = None):
+    cache_key = (team_id, get_se(season))
+    cached = _team_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = _fetch_team(team_label, team_id, season)
+    _team_cache.set(cache_key, result)
+    return result
+
+
+def _fetch_team(team_label: str, team_id: int, season: int | None = None):
     result = {}
-    
+
     base = get_base(season)
 
     params = {
@@ -224,7 +276,7 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
         "lng": "nl",
     }
 
-    r = requests.get(
+    r = _session.get(
         base,
         params=params,
         timeout=10,
@@ -331,7 +383,7 @@ def get_match_detail(match_code: str, match_id: int, season: int | None = None):
         "w": "%",
     }
 
-    r = requests.get(base, params=params, timeout=10)
+    r = _session.get(base, params=params, timeout=10)
     r.raise_for_status()
 
     if "error, match not found" in r.text.lower():
