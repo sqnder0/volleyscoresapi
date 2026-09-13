@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from scraper import search, get_club, get_team, get_ranking
+from scraper import search, get_club, get_team, get_match_detail
 from fastapi import HTTPException
 from requests.exceptions import HTTPError
 
@@ -34,6 +34,17 @@ def get_club_endpoint(club_label: str, club_id: int):
 @app.get("/api/get/team", tags=["team"])
 def get_team_endpoint(label: str, team_id: int):
     return get_team(label, team_id)
+
+
+@app.get("/api/get/match", tags=["match"])
+def get_match_endpoint(match_code: str, match_id: int):
+    result = get_match_detail(match_code, match_id)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+
+    return result
+
 
 @app.get("/api/search/history/{season}", tags=["search"])
 def search_all_history(season: int, q: str):
@@ -88,15 +99,3 @@ def get_team_endpoint_history(season: int, label: str, team_id: int):
             status_code=e.response.status_code if e.response else 502,
             detail=e.response.text if e.response else str(e),
         )
-
-@app.get("/api/get/league")
-def get_ranking_endpoint(label: str, league_id: int | None, season: int=2026):
-    result = get_ranking(label, league_id, season)
-    
-    if result == None:
-        raise HTTPException(
-            status_code=404,
-            detail="League not found"
-        )
-    else:
-        return result

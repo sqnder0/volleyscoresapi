@@ -1,13 +1,9 @@
-from playwright.sync_api import sync_playwright, expect
-from playwright.sync_api import Locator
 from typing import Literal
 from urllib.parse import urlencode
 import re
 from bs4 import BeautifulSoup
 import requests
 
-# Toggle for debug purposes
-HEADLESS=False
 CURRENT_SE = 13
 
 def get_se(season: int | None):
@@ -29,7 +25,7 @@ def search(q: str, search_type: Literal["club", "ploeg"] | None = None, season: 
             "v": 2,
             "lng": "nl",
             "a": "ac",
-            "se": 13,
+            "se": get_se(season),
             "query": q,
         },
         timeout=10,
@@ -79,7 +75,7 @@ def get_club(label: str, club_id: int , season: int | None = None):
         "isActiveSeason": "1",
         "t": f"Club {label}",
         "a": "cc",
-        "se": "13",
+        "se": str(get_se(season)),
         "ci": str(club_id),
         "lng": "nl",
     }
@@ -195,6 +191,16 @@ def _extract_team(td):
     }
 
 
+def _extract_onclick_id(onclick):
+    """Pulls a numeric loadPage(...) argument out as its own comma-delimited
+    token, quoted or not (markup is inconsistent between pages, and labels
+    can contain literal parentheses so a [^)] bound doesn't work)."""
+    if not onclick:
+        return None
+    ids = re.findall(r",\s*'?(\d{5,9})'?\s*,", str(onclick))
+    return int(ids[-1]) if ids else None
+
+
 def get_team(team_label: str, team_id: int , season: int | None = None):
     result = {}
     
@@ -206,7 +212,7 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
         "isActiveSeason": "1",
         "t": f"Ploeg {team_label}",
         "a": "t",
-        "se": "13",
+        "se": str(get_se(season)),
         "ti": str(team_id),
         "lng": "nl",
     }
@@ -224,11 +230,16 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
     name = page.find("div", class_="teamtitle") 
     
     if name:
-        name = name.get_text()
+        name = name.get_text().strip()
     else:
         name = team_label
-    
 
+    # The site pads the title with trailing whitespace after the closing
+    # ")", which broke the `name[start + 1:-1]` slice below (it assumed the
+    # very last character was ")", so it cut off the trailing space instead
+    # of the paren and left a stray ")" in the league name). Stripped above
+    # so the scan below can rely on the last non-empty character actually
+    # being the closing paren.
     depth = 0
     start = None
 
@@ -250,104 +261,45 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
 
     result["calendar"] = f"https://www.volleyscores.be/calendar/team/{team_id}"
     result["matches"] = []
-    
-    table = page.select_one("table.table")
 
-    if not table:
-        return result
+    # The page can contain several table.table elements sharing identical
+    # headers (e.g. a "matches this week" widget alongside the full-season
+    # schedule), so header-matching alone can't tell them apart. Parse every
+    # candidate and keep whichever yields the most match rows - the full
+    # schedule always has more rows than a short "this week" widget.
+    best_matches = []
 
-    for tr in table.select("tr"):
-        teams = tr.select("td.hidden-xs.team")
+    for table in page.select("table.table"):
+        candidate_matches = []
 
-        if len(teams) != 2:
-            continue
+        for tr in table.select("tr"):
+            teams = tr.select("td.hidden-xs.team")
 
-        cells = tr.find_all("td", recursive=False)
+            if len(teams) != 2:
+                continue
 
-        if len(cells) < 8:
-            continue
+            cells = tr.find_all("td", recursive=False)
 
-        result["matches"].append({
-            "match_code": cells[1].get_text(strip=True),
-            "day": cells[2].get_text(strip=True),
-            "date": cells[3].get_text(strip=True),
-            "time": cells[4].get_text(strip=True),
-            "home_team": _extract_team(teams[0]),
-            "away_team": _extract_team(teams[1]),
-            "venue": cells[7].get_text(strip=True),
-            "result": cells[8].get_text(strip=True),
-        })
+            if len(cells) < 8:
+                continue
 
-    result["ranking"] = _parse_ranking_table(page)
-    
-    return result
+            candidate_matches.append({
+                "match_code": cells[1].get_text(strip=True),
+                "match_id": _extract_onclick_id(cells[1].get("onclick")),
+                "day": cells[2].get_text(strip=True),
+                "date": cells[3].get_text(strip=True),
+                "time": cells[4].get_text(strip=True),
+                "home_team": _extract_team(teams[0]),
+                "away_team": _extract_team(teams[1]),
+                "venue": cells[7].get_text(strip=True),
+                "result": cells[8].get_text(strip=True),
+            })
 
+        if len(candidate_matches) > len(best_matches):
+            best_matches = candidate_matches
 
-def get_league(q: str, season: int | None = None):
-    se = get_se(season) if season else get_se(2026)
+    result["matches"] = best_matches
 
-    r = requests.get(
-        get_base(),
-        params={"v": 2, "lng": "nl", "a": "ac", "se": se, "query": q},
-        timeout=10,
-    )
-    r.raise_for_status()
-    data = r.json()
-    league = None
-
-    for item in data["suggestions"]:
-        if item["data"]["category"] == "Reeksen":
-            league = {
-                "label": item["value"],
-                "league_id": item["data"]["fields"]["ssi"],
-            }
-
-    if league is None:
-        return None
-
-    # Fetch the ranking page — same endpoint/table markup get_ranking() uses —
-    # and attach the parsed ranking to this league.
-    base = get_base()
-    params = {
-        "v": "2", "ss": "0", "isActiveSeason": "1",
-        "t": league["label"], "a": "sd", "se": se,
-        "ssi": str(league["league_id"]), "st": "%", "w": "%", "lng": "nl",
-    }
-
-    r = requests.get(base, params=params, timeout=10)
-    r.raise_for_status()
-    page = BeautifulSoup(r.text, "html.parser")
-
-    ranking, alert_text = _parse_ranking_table(page)
-    league["ranking"] = ranking
-    if alert_text:
-        league["alert"] = alert_text
-
-    return league
-
-def get_ranking(series_label: str, league_id, season: int = 2026):
-    se = get_se(season)
-
-    if league_id is None:
-        league = get_league(series_label, season=season)
-        if league is None or league.get("label", "").lower() != series_label.lower():
-            return None
-        series_id = league["league_id"]
-    else:
-        series_id = league_id
-
-    base = get_base()
-    params = {
-        "v": "2", "ss": "0", "isActiveSeason": "1",
-        "t": series_label, "a": "sd", "se": se,
-        "ssi": str(series_id), "st": "%", "w": "%", "lng": "nl",
-    }
-
-    r = requests.get(base, params=params, timeout=10)
-    r.raise_for_status()
-    page = BeautifulSoup(r.text, "html.parser")
-
-    result = {"series": series_label, "series_id": series_id, "ranking": []}
     ranking, alert_text = _parse_ranking_table(page)
     result["ranking"] = ranking
     if alert_text:
@@ -355,9 +307,63 @@ def get_ranking(series_label: str, league_id, season: int = 2026):
 
     return result
 
+
+def get_match_detail(match_code: str, match_id: int, season: int | None = None):
+    """Per-set scores for a single match, via the site's undocumented
+    match-detail ('md') action. match_id is the internal numeric id
+    (get_team()'s matches carry it as "match_id"), not the match_code."""
+    base = get_base(season)
+    params = {
+        "v": "2",
+        "isActiveSeason": "1",
+        "t": match_code,
+        "a": "md",
+        "se": str(get_se(season)),
+        "mm": str(match_id),
+        "lng": "nl",
+        "w": "%",
+    }
+
+    r = requests.get(base, params=params, timeout=10)
+    r.raise_for_status()
+
+    if "error, match not found" in r.text.lower():
+        return None
+
+    page = BeautifulSoup(r.text, "html.parser")
+    result = {"match_code": match_code, "result": None, "sets": []}
+
+    score_el = page.select_one(".alert-score .h4 strong")
+    if score_el:
+        result["result"] = score_el.get_text(strip=True)
+
+    for row in page.select(".alert-score .row"):
+        label = row.find(class_="col-xs-3")
+        value = row.find(class_="col-xs-9")
+        if not label or not value:
+            continue
+        if label.get_text(strip=True).lower() != "sets":
+            continue
+
+        for part in value.get_text(strip=True).split(","):
+            part = part.strip()
+            if "/" not in part:
+                continue
+            home_str, away_str = part.split("/", 1)
+            try:
+                result["sets"].append(
+                    {"home": int(home_str), "away": int(away_str)}
+                )
+            except ValueError:
+                continue
+        break
+
+    return result
+
+
 def _parse_ranking_table(page: BeautifulSoup):
     """Shared table-parsing logic for the ranking table (table.table with
-    'Ploeg'/'Ptn' headers). Used by both get_ranking() and get_league()."""
+    'Ploeg'/'Ptn' headers). Used by get_team()."""
     ranking = []
 
     alert = page.find("div", class_="alert")
@@ -383,11 +389,7 @@ def _parse_ranking_table(page: BeautifulSoup):
             cell_texts = [td.get_text(" ", strip=True) for td in tds]
 
             team_td = row.select_one("td.hidden-xs.team")
-            team_id = None
-            if team_td and team_td.has_attr("onclick"):
-                m = re.search(r"loadPage\([^)]*?'(\d+)'[^)]*\)", str(team_td["onclick"]))
-                if m:
-                    team_id = int(m.group(1))
+            team_id = _extract_onclick_id(team_td.get("onclick") if team_td else None)
 
             try:
                 entry = {
