@@ -1,16 +1,23 @@
 from typing import Literal
 from urllib.parse import urlencode
+from datetime import date
 import re
 from bs4 import BeautifulSoup
 import requests
 
-CURRENT_SE = 13
 
-def get_se(season: int | None):
+def current_season_year(today: date | None = None) -> int:
+    """The site's season year rolls over on June 1st, not January 1st."""
+    today = today or date.today()
+    if (today.month, today.day) >= (6, 1):
+        return today.year
+    return today.year - 1
+
+
+def get_se(season: int | None = None) -> int:
     if season:
         return season - 2013
-    else:
-        return CURRENT_SE
+    return current_season_year() - 2013
 
 
 def get_base(s: int | None = None):
@@ -227,33 +234,33 @@ def get_team(team_label: str, team_id: int , season: int | None = None):
 
     page = BeautifulSoup(r.text, "html.parser")
     
-    name = page.find("div", class_="teamtitle") 
-    
+    name = page.find("div", class_="teamtitle")
+
     if name:
-        name = name.get_text().strip()
+        name = name.get_text(strip=True)
     else:
         name = team_label
 
     # The site pads the title with trailing whitespace after the closing
-    # ")", which broke the `name[start + 1:-1]` slice below (it assumed the
-    # very last character was ")", so it cut off the trailing space instead
-    # of the paren and left a stray ")" in the league name). Stripped above
-    # so the scan below can rely on the last non-empty character actually
-    # being the closing paren.
-    depth = 0
+    # ")" - anchor the scan on the last actual ")" (via rfind) rather than
+    # len(name) - 1, so trailing junk after it doesn't get swallowed into
+    # the league name (or the paren itself left dangling in it).
+    end = name.rfind(")")
     start = None
 
-    for i in range(len(name) - 1, -1, -1):
-        if name[i] == ")":
-            depth += 1
-        elif name[i] == "(":
-            depth -= 1
-            if depth == 0:
-                start = i
-                break
+    if end != -1:
+        depth = 0
+        for i in range(end, -1, -1):
+            if name[i] == ")":
+                depth += 1
+            elif name[i] == "(":
+                depth -= 1
+                if depth == 0:
+                    start = i
+                    break
 
     if start is not None:
-        result["league"] = name[start + 1:-1].strip()
+        result["league"] = name[start + 1:end].strip()
         name = name[:start].rstrip()
 
     name = name.removeprefix("Ploeg ").strip()
